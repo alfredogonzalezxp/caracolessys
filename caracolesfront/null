@@ -1,0 +1,207 @@
+# How to Test the DevCourses Application
+
+This document provides a comprehensive guide on running and writing tests for the frontend Next.js application.
+
+The project uses **Jest** alongside **React Testing Library** (`@testing-library/react`) to test UI components, React hooks, Contexts, and API integrations. Mocking is heavily utilized to prevent actual network requests or side effects during the tests.
+
+---
+
+## Running Tests
+
+Ensure you are located in the `DevCoursesfront` directory in your terminal before running these commands.
+
+### 1. Run the Entire Test Suite
+
+Executes all files ending in `.test.ts` or `.test.tsx`.
+
+```bash
+npm run test
+```
+
+### 2. Run Tests in Watch Mode (For Development)
+
+This mode watches for file changes. If you modify a component or a test file, Jest will automatically re-run the tests related to that file.
+
+```bash
+npm run test:watch
+```
+
+### 3. Run a Specific Test File
+
+If you only want to run the tests for a single component:
+
+```bash
+npm run test -- app/users/manage_usr.test.tsx
+```
+
+### 4. Run Tests with Coverage
+
+If you want to see how much of your codebase is covered by tests:
+
+```bash
+npm run test -- --coverage
+```
+
+---
+
+## How Testing Works in this Project
+
+### 1. Mocking the API Layer
+
+To prevent tests from hitting an actual backend (which may be offline or throw errors), we mock the API module or the `axios` instance globally.
+
+**Example: Mocking Axios globally:**
+
+```typescript
+import axios from "axios";
+jest.mock("axios", () => {
+  return {
+    create: jest.fn(() => ({
+      post: jest.fn(),
+      get: jest.fn(),
+      delete: jest.fn(),
+      put: jest.fn(),
+    })),
+  };
+});
+```
+
+**Example: Mocking defined API methods directly (preferred for components):**
+
+```typescript
+jest.mock("@/api/api", () => ({
+  getAllUsers: jest.fn(),
+  deleteUser: jest.fn(),
+  signup: jest.fn(),
+  updateUser: jest.fn(),
+}));
+```
+
+### 2. Mocking Contexts (`useAuth`)
+
+When testing child components that rely on `AuthContext`, you must provide a mock implementation of the context so the component thinks it is authenticated (or not).
+
+```typescript
+import { useAuth } from "@/app/context/AuthContext";
+
+jest.mock("@/app/context/AuthContext", () => ({
+  useAuth: jest.fn(),
+}));
+
+// In your test block:
+(useAuth as jest.Mock).mockReturnValue({
+  isAuthenticated: true,
+  role: "ADMIN",
+  logout: jest.fn(),
+});
+```
+
+### 3. Mocking `next/navigation`
+
+Next.js routers and pathname hooks must be mocked, or rendering UI components will crash during tests.
+
+```typescript
+import { usePathname, useRouter } from "next/navigation";
+
+jest.mock("next/navigation", () => ({
+  usePathname: jest.fn(),
+  useRouter: jest.fn(() => ({
+    push: jest.fn(),
+  })),
+}));
+
+// Before each test:
+(usePathname as jest.Mock).mockReturnValue("/dashboard");
+```
+
+---
+
+## Writing a New Component Test
+
+When creating a new component (e.g., `app/courses/CourseList.tsx`), follow these steps:
+
+1. Create a corresponding test file next to it: `app/courses/CourseList.test.tsx`.
+2. Import React, the `@testing-library/react` methods (`render`, `screen`, `fireEvent`, `waitFor`), and your component.
+3. Mock any APIs or Contexts the component uses.
+4. Render the component.
+5. Use `screen.getByText`, `screen.getByRole`, or `screen.getByPlaceholderText` to target elements.
+6. Trigger user events via `fireEvent.click()` or `fireEvent.change()`.
+7. Assert outcomes using `expect()`.
+
+**Remember:** If your test triggers a state update inside the component (like fetching data or showing a loading spinner), wrap your assertions in `waitFor()`:
+
+```typescript
+await waitFor(() => {
+  expect(screen.getByText("Data Loaded Successfully!")).toBeInTheDocument();
+});
+```
+
+---
+
+## Advanced: Testing Complex Components (Multiple APIs & Contexts)
+
+When testing advanced components (like Dashboards or Management Panels) that rely on both User Role context (`useAuth`) and multiple backend APIs, it's essential to reset your mocks and return specific values for each test case.
+
+**Example for a Role-Based Component:**
+
+```typescript
+import { render, screen, waitFor } from '@testing-library/react';
+import * as api from '@/api/api';
+import { useAuth } from '@/app/context/AuthContext';
+import UserSpace from './UserSpace';
+
+// 1. Mock the entire API module and the AuthContext
+jest.mock('@/api/api', () => ({
+  getUserEnrollments: jest.fn(),
+  getAllUsers: jest.fn(),
+}));
+
+jest.mock('@/app/context/AuthContext', () => ({
+  useAuth: jest.fn(),
+}));
+
+describe('UserSpace Component', () => {
+  beforeEach(() => {
+    // 2. Clear previous states between tests
+    jest.clearAllMocks();
+  });
+
+  test('renders user specific view', async () => {
+    // 3. Mock the role to USER
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      role: 'USER',
+    });
+
+    // 4. Return user-specific data
+    (api.getUserEnrollments as jest.Mock).mockResolvedValue([{ id: 1, courseTitle: 'React 101' }]);
+
+    render(<UserSpace />);
+
+    await waitFor(() => {
+      expect(screen.getByText('React 101')).toBeInTheDocument();
+    });
+
+    // Ensure admin functionality is hidden
+    expect(screen.queryByText('Admin Panel')).not.toBeInTheDocument();
+  });
+
+  test('renders admin specific view', async () => {
+    // 3. Mock the role to ADMIN
+    (useAuth as jest.Mock).mockReturnValue({
+      isAuthenticated: true,
+      role: 'ADMIN',
+    });
+
+    // 4. Return admin-specific data
+    (api.getUserEnrollments as jest.Mock).mockResolvedValue([]);
+    (api.getAllUsers as jest.Mock).mockResolvedValue([{ id: 1, nombre: 'Admin User' }]);
+
+    render(<UserSpace />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin Panel')).toBeInTheDocument();
+    });
+  });
+});
+```
